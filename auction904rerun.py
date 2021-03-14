@@ -55,16 +55,10 @@ def census_block_groups():
         block_groups[row[0]] = {'won': False}
     print("Number of census block groups", cur.rowcount)
     cur.close()
-#    for row in block_groups:
-#        print(row)
-    # dbConnection = alchemyEngine.connect()
-    # df_bg = pds.read_sql("SELECT distinct census_id, random() from auction904results  order by random() limit 1")
-    # dbConnection.close()
     return block_groups
 
 
 def get_round_results(round, block_group):
-    # print(round, "block group: ", block_group)
     dbConnection    = alchemyEngine.connect()
     df = pds.read_sql(f"SELECT round, bidder, t_l_weight, price_point_bid, \
      bid_clock_pct_flag, min_scale_pct, my_assigned_status, not_assigned_reason, \
@@ -72,7 +66,6 @@ def get_round_results(round, block_group):
      FROM auction904results r LEFT JOIN auction904eligible_blockgroups bg \
      on r.census_id = bg.block_group_id WHERE census_id = \
      '{block_group}' and round = '{round}' \
-     and frn not in ('0004963088','0017434911','0026043968') \
      ", dbConnection )
     dbConnection.close()
     df['price_point_bid'] = df['price_point_bid'].astype(float)
@@ -92,7 +85,7 @@ def calc_cost(round, price_point):
     cur = con.cursor(cursor_factory = psycopg2.extras.DictCursor)
     cur.execute(f"SELECT sum((({price_point} - t_l_weight::int) / 100::float) * reserve_price) as budget \
      FROM auction904_rerun r LEFT JOIN auction904eligible_blockgroups bg \
-     on r.block_group = bg.block_group_id WHERE round = '{round}' and iteration = 4")
+     on r.block_group = bg.block_group_id WHERE round = '{round}' and iteration = 7")
     results = cur.fetchall()
     for row in results:
         cost = int(row[0])
@@ -101,7 +94,6 @@ def calc_cost(round, price_point):
     return cost
 
 
-        # delete_records(round)
 def calc_clearing_price_point(auction_round, low_bid, high_bid, guess_bid_previous):
     global clearing_price
     guess_bid = round((((high_bid - low_bid) / 2) + low_bid), 2)
@@ -109,6 +101,7 @@ def calc_clearing_price_point(auction_round, low_bid, high_bid, guess_bid_previo
     if guess_bid == guess_bid_previous:
         print("done at :", guess_bid)
         clearing_price = guess_bid
+        print(clearing_price)
         return guess_bid
     cost = calc_cost(auction_round, guess_bid)
     if cost < budget:
@@ -116,12 +109,11 @@ def calc_clearing_price_point(auction_round, low_bid, high_bid, guess_bid_previo
     else:
         calc_clearing_price_point(auction_round, low_bid, guess_bid, guess_bid)
 
+
 def write_results(round, block_group, status, bidder, price_point_bid, t_l_weight, assigned_support_price):
     sql = """INSERT INTO auction904_rerun (iteration, round, block_group, status, \
                   bidder, price_point_bid, t_l_weight, assigned_support_price)
-                  VALUES (4, %s, %s, %s, %s, %s, %s, %s);"""
-    # print(round, block_group, status, bidder, price_point_bid, t_l_weight)
-    # print("about to write results")
+                  VALUES (7, %s, %s, %s, %s, %s, %s, %s);"""
     cur = con.cursor()
     cur.execute(sql, (round, block_group, status, bidder, price_point_bid, t_l_weight, assigned_support_price))
     con.commit()
@@ -178,24 +170,15 @@ def support_payment(df, round, i, winner_order_exclude):
         df_exclude_lower = df_exclude.loc[df_exclude["price_point_bid"] <= df.loc[i]['price_point_bid']]
     else:
         df_exclude_lower = df_exclude.loc[df_exclude["t_l_weight"] <= df.loc[i]['t_l_weight']]
-    # print("assigning support payment")
-    # print(df)
-    # print("record number: ", i)
-    # print("number of bids excluding itself: ", len(df_exclude_lower))
-    # print("this is the clearing round: ", rounds[round]["clearing"])
-    # print("budget has cleared: ", cleared)
+
     if len(df_exclude_lower) == 0 and rounds[round]["clearing"] == True:
         assigned_support_price = clearing_price
-        # print("assigned1: ", assigned_support_price)
     elif len(df_exclude_lower) > 0 and rounds[round]["clearing"] == True:
         assigned_support_price = max(df.loc[i]['price_point_bid'], df_exclude_lower["price_point_bid"].min())
-        # print("assigned2: ", assigned_support_price)
     elif len(df_exclude_lower) == 0 and cleared == True:
         assigned_support_price = rounds[str(int(round) - 1)]["clock_pct"]
-        # print("assigned3: ", assigned_support_price)
     elif len(df_exclude_lower) > 0 and cleared == True:
         assigned_support_price = max(df.loc[i]['price_point_bid'], df_exclude_lower["price_point_bid"].min())
-        # print("assigned4: ", assigned_support_price)
     else:
         pass
     return assigned_support_price
@@ -207,8 +190,7 @@ def winner(df, round, block_group, bid_stats):
     elif cleared == True:
         winner_order = bid_stats["winner_order_later"]
     won = False
-    # print(df)
-    # print("winning order: ", winner_order)
+
     for i in winner_order:
         winner_order_exclude = list(filter(lambda num: num != i,
                                             winner_order))
@@ -223,10 +205,7 @@ def winner(df, round, block_group, bid_stats):
             pass
         elif assignable == True:
             won = True
-            # print("block group won: ", block_group)
             block_groups[block_group]["won"] = True
-            # print("winning record is: ", i, " which is ", df.loc[i]["bidder"])
-            # print(df)
             assigned_support_price = support_payment(df, round, i, winner_order_exclude)
             block_groups[block_group]["won"] = True
             write_results(round, block_group, 'won', df.loc[i]["bidder"], df.loc[i]['price_point_bid'], df.loc[i]['t_l_weight'], assigned_support_price)
@@ -245,13 +224,12 @@ def iterate_bgs(round):
             pass
         else:
             df = get_round_results(round, block_group)
-            # bid_stats_eligible = calc_bid_stats(df.loc[df['not_assigned_reason'] != 'Minimum scale percentage not met'], round)
             if len(df) > 0:
                 if cleared == False:
                     write_results(round, block_group, 'push', 'UNK', rounds[round]["clock_pct"], df['t_l_weight'].min(), 0)
                 else:
                     bid_stats = calc_bid_stats(df, round)
-                    winner(df, round, block_group, bid_stats)#, bid_stats_eligible)
+                    winner(df, round, block_group, bid_stats)
             else:
                 pass
 
@@ -265,8 +243,7 @@ def sort_results(round):
         print("This is the clearing round")
         cleared = True
         rounds[round]["clearing"] = True
-        clearing_price = calc_clearing_price_point(round, rounds[round]["clock_pct"], rounds[str(int(round) - 1)]["clock_pct"], rounds[round]["clock_pct"])
-        print("The clearing price for the round is: ", clearing_price)
+        calc_clearing_price_point(round, rounds[round]["clock_pct"], rounds[str(int(round) - 1)]["clock_pct"], rounds[round]["clock_pct"])
         delete_records(round)
         iterate_bgs(round)
 
@@ -275,8 +252,7 @@ def iterate_rounds():
     for round in rounds:
         sort_results(round)
 
-block_groups = census_block_groups()
-#sort_results('14')
-iterate_rounds()
 
-#450750107001
+block_groups = census_block_groups()
+
+iterate_rounds()
